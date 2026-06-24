@@ -2751,9 +2751,11 @@ msg_t *tport_msg_alloc(tport_t const *self, usize_t size)
     int flags = mr->mr_log;
     msg_t *msg;
 
-    /* Capture rebuilds the payload via msg_iovec(), which needs the
-     * header wire image that only MSG_DO_EXTRACT_COPY preserves. */
-    if (mr->mr_capt_sock) {
+    /* Capture rebuilds the payload via msg_iovec(), which needs the header wire
+     * image that only MSG_DO_EXTRACT_COPY preserves. Required for capturing
+     * RECEIVED messages in either mode — udp socket OR callback; without it the
+     * recv-capture gate skips them and only sent traffic is captured. */
+    if (mr->mr_capt_sock || mr->mr_capt_callback) {
       flags |= MSG_DO_EXTRACT_COPY;
     }
 
@@ -3133,7 +3135,7 @@ void tport_deliver(tport_t *self,
 
   /* Capture needs the wire image MSG_FLG_EXTRACT_COPY preserves; messages
    * allocated before capture was enabled lack it, so skip them. */
-  if (!error && self->tp_master->mr_capt_sock && msg != self->tp_rcaptured
+  if (!error && (self->tp_master->mr_capt_sock || self->tp_master->mr_capt_callback) && msg != self->tp_rcaptured
       && msg_get_flags(msg, MSG_FLG_EXTRACT_COPY)) {
     msg_iovec_t iov[TPORT_CAPT_IOVMAX];
     size_t i, iovlen = msg_iovec(msg, iov, TPORT_CAPT_IOVMAX);
@@ -3708,7 +3710,7 @@ ssize_t tport_vsend(tport_t *self,
   if (n > 0 && self->tp_master->mr_dump_file)
     tport_dump_iovec(self, msg, n, iov, iovused, "sent", "to");
     
-  if (n > 0 && self->tp_master->mr_capt_sock)
+  if (n > 0 && (self->tp_master->mr_capt_sock || self->tp_master->mr_capt_callback))
       tport_capt_msg(self, msg, n, iov, iovused, "sent");
               
 
