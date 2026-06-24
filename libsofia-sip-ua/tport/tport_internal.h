@@ -309,6 +309,7 @@ struct tport_master {
   su_socket_t         mr_capt_sock;
   char               *mr_capt_name;	/**< Servername for capturing received/sent data */
   su_addrinfo_t      *mr_capt_src_addr;
+  int                 mr_capt_callback;	/**< capture in callback mode (no socket; HEP3 → registered callback) */
   tport_primary_t    *mr_primaries;        /**< List of primary contacts */
   unsigned	      mr_prot_ver;	/* hep version */
   unsigned	      mr_agent_id;      /* agent version */

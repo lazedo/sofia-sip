@@ -118,6 +118,17 @@ su_log_t tport_log[] = {
 
 
 
+/* Global HEP capture callback (callback capture mode), set via
+   tport_capt_callback_set — works like su_log_redirect: a process-wide hook. */
+static tport_capt_callback_f *tport_capt_cb = NULL;
+static void *tport_capt_cb_arg = NULL;
+
+void tport_capt_callback_set(tport_capt_callback_f *callback, void *arg)
+{
+  tport_capt_cb = callback;
+  tport_capt_cb_arg = arg;
+}
+
 /** Initialize logging. */
 int tport_open_log(tport_master_t *mr, tagi_t *tags)
 {
@@ -177,7 +188,70 @@ int tport_open_log(tport_master_t *mr, tagi_t *tags)
         captname = su_strdup(mr->mr_home, capt);
         if (captname == NULL)
               return n;
-                           
+
+        /* "callback" capture mode: no UDP socket; tport_capt_msg hands the
+           serialized HEP3 to the callback registered via tport_capt_callback_set.
+           Accepts the same ;-separated params as the udp form, so the capture id
+           reaches the HEP3 envelope, e.g. "callback;hep=3;capture_id=10023". */
+        if (strncmp(captname, "callback", 8) == 0
+            && (captname[8] == '\0' || captname[8] == ';')) {
+              char *q = captname + 8;
+
+              if (mr->mr_capt_sock)
+                    su_close(mr->mr_capt_sock), mr->mr_capt_sock = 0;
+
+              /* defaults, overridden by the params below */
+              mr->mr_prot_ver = 3;
+              mr->mr_agent_id = 200;
+              mr->mr_capt_bufsize = TPORT_CAPT_BUFSIZE_DEFAULT;
+
+              /* parse ;hep=N;capture_id=N;bufsize=N off the working copy */
+              while (q) {
+                    if ((q = strchr(q, ';')) == 0)
+                          break;
+                    *q = '\0';
+                    q++;
+                    if (strncmp(q, "hep=", 4) == 0) {
+                          q += 4;
+                          mr->mr_prot_ver = atoi(q);
+                          if (mr->mr_prot_ver < 1 || mr->mr_prot_ver > 3) {
+                                su_log("invalid hep version number; must be in [1-3]\n");
+                                mr->mr_prot_ver = 3;
+                          }
+                    }
+                    else if (strncmp(q, "capture_id=", 11) == 0) {
+                          q += 11;
+                          if ((mr->mr_agent_id = atoi(q)) == 0) {
+                                mr->mr_agent_id = 200;
+                                su_log("invalid capture id number; must be uint32\n");
+                          }
+                    }
+                    else if (strncmp(q, "bufsize=", 8) == 0) {
+                          unsigned bs;
+                          q += 8;
+                          bs = (unsigned)atoi(q);
+                          if (bs < 2048 || bs > 65000)
+                                su_log("invalid bufsize; must be in [2048, 65000]\n");
+                          else
+                                mr->mr_capt_bufsize = bs;
+                    }
+                    else {
+                          su_log("unsupported capture param\n");
+                    }
+              }
+
+              /* keep the original (untruncated) name for dedup/display */
+              su_free(mr->mr_home, captname);
+              captname = su_strdup(mr->mr_home, capt);
+              if (captname == NULL)
+                    return n;
+              su_free(mr->mr_home, mr->mr_capt_name);
+              mr->mr_capt_name = captname;
+              mr->mr_capt_callback = 1;
+              return n;
+        }
+        mr->mr_capt_callback = 0;
+
         if(strncmp(captname, "udp:",4) != 0) {
               su_log("tport_open_log: capturing. Only udp protocol supported [%s]\n", captname);          
               return n;
@@ -445,13 +519,23 @@ void tport_capt_msg(tport_t const *self, msg_t *msg, size_t n,
 
    mr = self->tp_master;
 
-   /* If we don't have socket, go out */
-   if (!mr->mr_capt_sock) {
+   /* need either a capture socket or a registered callback */
+   if (!mr->mr_capt_sock && !mr->mr_capt_callback) {
          su_log("error: capture socket is not open\n");
          return;
    }
-   
-   switch(mr->mr_prot_ver) 
+
+   /* skip OPTIONS (not useful for HOMER), mirroring tport_log_msg */
+   if (mr->mr_log_filter_options) {
+         sip_t *sip = sip_object(msg);
+         if (sip) {
+               sip_cseq_t *seq = sip_cseq(sip);
+               if (seq && seq->cs_method == sip_method_options)
+                     return;
+         }
+   }
+
+   switch(mr->mr_prot_ver)
    {
 
             case 3:
@@ -469,14 +553,22 @@ void tport_capt_msg(tport_t const *self, msg_t *msg, size_t n,
    }
 
    if(buflen > 0) {
-            /* check if we have error i.e. capture server is down */
-            if (su_soerror(mr->mr_capt_sock)) {
-                     su_perror("error: tport_logging: capture socket error");
-                     goto done;
-            }              
-            
-            su_send(mr->mr_capt_sock, buffer, buflen, 0);   
-   }                                                    
+            if (mr->mr_capt_callback && tport_capt_cb) {
+                     /* callback mode: hand the serialized HEP3 + SIP Call-ID to the
+                        registered consumer (no UDP send) */
+                     sip_t *sip = sip_object(msg);
+                     char const *call_id = (sip && sip->sip_call_id) ? sip->sip_call_id->i_id : NULL;
+                     tport_capt_cb(tport_capt_cb_arg, buffer, buflen, call_id, what);
+            } else if (mr->mr_capt_sock) {
+                     /* check if we have error i.e. capture server is down */
+                     if (su_soerror(mr->mr_capt_sock)) {
+                              su_perror("error: tport_logging: capture socket error");
+                              goto done;
+                     }
+
+                     su_send(mr->mr_capt_sock, buffer, buflen, 0);
+            }
+   }
 
 
 done:

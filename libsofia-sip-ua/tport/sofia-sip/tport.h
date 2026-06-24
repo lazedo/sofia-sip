@@ -187,6 +187,13 @@ TPORT_DLL int tport_get_params(tport_t const *, tag_type_t tag, tag_value_t valu
 /** Set transport parameters. */
 TPORT_DLL int tport_set_params(tport_t *self, tag_type_t tag, tag_value_t value, ...);
 
+/** HEP capture callback: receives the serialized HEP3 packet (callback capture mode). */
+typedef void (tport_capt_callback_f)(void *arg, void const *hep3, int len,
+                                     char const *call_id, char const *what);
+
+/** Register a global HEP capture callback (used when capture is in "callback" mode). */
+TPORT_DLL void tport_capt_callback_set(tport_capt_callback_f *callback, void *arg);
+
 /** Destroy transport(s). */
 TPORT_DLL void tport_destroy(tport_t *tport);
 
