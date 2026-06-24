@@ -3133,7 +3133,7 @@ void tport_deliver(tport_t *self,
 
   /* Capture needs the wire image MSG_FLG_EXTRACT_COPY preserves; messages
    * allocated before capture was enabled lack it, so skip them. */
-  if (!error && self->tp_master->mr_capt_sock && msg != self->tp_rcaptured
+  if (!error && (self->tp_master->mr_capt_sock || self->tp_master->mr_capt_callback) && msg != self->tp_rcaptured
       && msg_get_flags(msg, MSG_FLG_EXTRACT_COPY)) {
     msg_iovec_t iov[TPORT_CAPT_IOVMAX];
     size_t i, iovlen = msg_iovec(msg, iov, TPORT_CAPT_IOVMAX);
@@ -3708,7 +3708,7 @@ ssize_t tport_vsend(tport_t *self,
   if (n > 0 && self->tp_master->mr_dump_file)
     tport_dump_iovec(self, msg, n, iov, iovused, "sent", "to");
     
-  if (n > 0 && self->tp_master->mr_capt_sock)
+  if (n > 0 && (self->tp_master->mr_capt_sock || self->tp_master->mr_capt_callback))
       tport_capt_msg(self, msg, n, iov, iovused, "sent");
               
 
